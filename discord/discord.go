@@ -441,7 +441,7 @@ func (b *DiscordBot) stayActiveMessageTask() {
 				logger.DefaultLogger.Error(fmt.Sprintf("ChannelId{%s} BotId{%s} 活跃机器人任务消息发送异常!雪花Id生成失败!", sendChannelId, config.BotId))
 				continue
 			}
-			_, _, err = b.SendMessageSpec(sendChannelId, config.BotId, fmt.Sprintf("【%v】 %s", nextID, "CDP Scheduled Task Job Send Msg Success!"))
+			_, _, _, err = b.SendMessageSpec(sendChannelId, config.BotId, fmt.Sprintf("【%v】 %s", nextID, "CDP Scheduled Task Job Send Msg Success!"))
 			if err != nil {
 				logger.DefaultLogger.Error(fmt.Sprintf("ChannelId{%s} BotId{%s} 活跃机器人任务消息发送异常!", sendChannelId, config.BotId))
 			} else {

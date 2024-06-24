@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/wwqdrh/gobot/types"
 	"github.com/wwqdrh/gokit/logger"
 )
 
@@ -60,109 +60,6 @@ type ThreadReq struct {
 	ChannelId       string `json:"channelId" swaggertype:"string" description:"频道Id"`
 	Name            string `json:"name" swaggertype:"string" description:"线程名称"`
 	ArchiveDuration int    `json:"archiveDuration" swaggertype:"number" description:"线程存档时间[分钟]"`
-}
-
-type OpenAIChatCompletionRequest struct {
-	Model    string              `json:"model"`
-	Stream   bool                `json:"stream"`
-	Messages []OpenAIChatMessage `json:"messages"`
-	OpenAIChatCompletionExtraRequest
-}
-
-type OpenAIChatCompletionExtraRequest struct {
-	ChannelId *string `json:"channelId"`
-}
-
-type OpenAIChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
-}
-
-type OpenAIErrorResponse struct {
-	OpenAIError OpenAIError `json:"error"`
-}
-
-type OpenAIError struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Param   string `json:"param"`
-	Code    string `json:"code"`
-}
-
-type OpenAIChatCompletionResponse struct {
-	ID                string         `json:"id"`
-	Object            string         `json:"object"`
-	Created           int64          `json:"created"`
-	Model             string         `json:"model"`
-	Choices           []OpenAIChoice `json:"choices"`
-	Usage             OpenAIUsage    `json:"usage"`
-	SystemFingerprint *string        `json:"system_fingerprint"`
-	Suggestions       []string       `json:"suggestions"`
-}
-
-type OpenAIChoice struct {
-	Index        int           `json:"index"`
-	Message      OpenAIMessage `json:"message"`
-	LogProbs     *string       `json:"logprobs"`
-	FinishReason *string       `json:"finish_reason"`
-	Delta        OpenAIDelta   `json:"delta"`
-}
-
-type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-type OpenAIDelta struct {
-	Content string `json:"content"`
-}
-
-type OpenAIImagesGenerationRequest struct {
-	OpenAIChatCompletionExtraRequest
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	ResponseFormat string `json:"response_format"`
-}
-
-type OpenAIImagesGenerationResponse struct {
-	Created     int64                                 `json:"created"`
-	DailyLimit  bool                                  `json:"dailyLimit"`
-	Data        []*OpenAIImagesGenerationDataResponse `json:"data"`
-	Suggestions []string                              `json:"suggestions"`
-}
-
-type OpenAIImagesGenerationDataResponse struct {
-	URL           string `json:"url"`
-	RevisedPrompt string `json:"revised_prompt"`
-	B64Json       string `json:"b64_json"`
-}
-
-type OpenAIGPT4VImagesReq struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	ImageURL struct {
-		URL string `json:"url"`
-	} `json:"image_url"`
-}
-
-// Model represents a model with its properties.
-type OpenaiModelResponse struct {
-	ID     string `json:"id"`
-	Object string `json:"object"`
-	//Created time.Time `json:"created"`
-	//OwnedBy string    `json:"owned_by"`
-}
-
-// ModelList represents a list of models.
-type OpenaiModelListResponse struct {
-	Object string                `json:"object"`
-	Data   []OpenaiModelResponse `json:"data"`
 }
 
 func (b *DiscordBot) loadUserAuthTask() {
@@ -226,13 +123,13 @@ func (b *DiscordBot) messageCreate(s *discordgo.Session, m *discordgo.MessageCre
 		logger.DefaultLogger.Debug(m.ReferencedMessage.ID)
 		replyOpenAIChan, exists := b.repliesOpenAIChans.Load(m.ReferencedMessage.ID)
 		if exists {
-			reply := processMessageCreateForOpenAI(m)
-			replyOpenAIChan.(chan OpenAIChatCompletionResponse) <- reply
+			reply := res2OpenAI(m)
+			replyOpenAIChan.(chan types.OpenAIChatCompletionResponse) <- reply
 		} else {
 			replyOpenAIImageChan, exists := b.repliesOpenAIImageChans.Load(m.ReferencedMessage.ID)
 			if exists {
 				reply := processMessageCreateForOpenAIImage(m)
-				replyOpenAIImageChan.(chan OpenAIImagesGenerationResponse) <- reply
+				replyOpenAIImageChan.(chan types.OpenAIImagesGenerationResponse) <- reply
 			} else {
 				return
 			}
@@ -243,7 +140,6 @@ func (b *DiscordBot) messageCreate(s *discordgo.Session, m *discordgo.MessageCre
 
 	// 如果消息包含组件或嵌入,则发送停止信号
 	if len(m.Message.Components) > 0 {
-
 		var suggestions []string
 
 		actionRow, _ := m.Message.Components[0].(*discordgo.ActionsRow)
@@ -254,18 +150,18 @@ func (b *DiscordBot) messageCreate(s *discordgo.Session, m *discordgo.MessageCre
 
 		replyOpenAIChan, exists := b.repliesOpenAIChans.Load(m.ReferencedMessage.ID)
 		if exists {
-			reply := processMessageCreateForOpenAI(m)
+			reply := res2OpenAI(m)
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan.(chan OpenAIChatCompletionResponse) <- reply
+			replyOpenAIChan.(chan types.OpenAIChatCompletionResponse) <- reply
 		}
 
 		replyOpenAIImageChan, exists := b.repliesOpenAIImageChans.Load(m.ReferencedMessage.ID)
 		if exists {
 			reply := processMessageCreateForOpenAIImage(m)
 			reply.Suggestions = suggestions
-			replyOpenAIImageChan.(chan OpenAIImagesGenerationResponse) <- reply
+			replyOpenAIImageChan.(chan types.OpenAIImagesGenerationResponse) <- reply
 		}
 
 		stopChan.(chan ChannelStopChan) <- ChannelStopChan{
@@ -307,12 +203,12 @@ func (b *DiscordBot) messageUpdate(s *discordgo.Session, m *discordgo.MessageUpd
 		replyOpenAIChan, exists := b.repliesOpenAIChans.Load(m.ReferencedMessage.ID)
 		if exists {
 			reply := processMessageUpdateForOpenAI(m)
-			replyOpenAIChan.(chan OpenAIChatCompletionResponse) <- reply
+			replyOpenAIChan.(chan types.OpenAIChatCompletionResponse) <- reply
 		} else {
 			replyOpenAIImageChan, exists := b.repliesOpenAIImageChans.Load(m.ReferencedMessage.ID)
 			if exists {
 				reply := processMessageUpdateForOpenAIImage(m)
-				replyOpenAIImageChan.(chan OpenAIImagesGenerationResponse) <- reply
+				replyOpenAIImageChan.(chan types.OpenAIImagesGenerationResponse) <- reply
 			} else {
 				return
 			}
@@ -338,14 +234,14 @@ func (b *DiscordBot) messageUpdate(s *discordgo.Session, m *discordgo.MessageUpd
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan.(chan OpenAIChatCompletionResponse) <- reply
+			replyOpenAIChan.(chan types.OpenAIChatCompletionResponse) <- reply
 		}
 
 		replyOpenAIImageChan, exists := b.repliesOpenAIImageChans.Load(m.ReferencedMessage.ID)
 		if exists {
 			reply := processMessageUpdateForOpenAIImage(m)
 			reply.Suggestions = suggestions
-			replyOpenAIImageChan.(chan OpenAIImagesGenerationResponse) <- reply
+			replyOpenAIImageChan.(chan types.OpenAIImagesGenerationResponse) <- reply
 		}
 
 		stopChan.(chan ChannelStopChan) <- ChannelStopChan{
@@ -354,13 +250,14 @@ func (b *DiscordBot) messageUpdate(s *discordgo.Session, m *discordgo.MessageUpd
 	}
 }
 
-func (b *DiscordBot) SendPlain(message string) ([]string, error) {
-	msg, _, err := b.SendRaw(message)
+func (b *DiscordBot) SendPlain(message string) (string, error) {
+	msg, _, channelid, err := b.SendRaw(message)
+	defer b.ChannelDel(channelid)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	logger.DefaultLogger.Debug(msg.ID)
-	replyChan := make(chan OpenAIChatCompletionResponse)
+	replyChan := make(chan types.OpenAIChatCompletionResponse)
 	b.repliesOpenAIChans.Store(msg.ID, replyChan)
 	defer b.repliesOpenAIChans.Delete(msg.ID)
 
@@ -368,7 +265,6 @@ func (b *DiscordBot) SendPlain(message string) ([]string, error) {
 	b.replyStopChans.Store(msg.ID, stopChan)
 	defer b.replyStopChans.Delete(msg.ID)
 
-	contents := []string{}
 	curcontent := ""
 	timer := time.NewTimer(60 * time.Second)
 	defer timer.Stop()
@@ -376,34 +272,25 @@ func (b *DiscordBot) SendPlain(message string) ([]string, error) {
 		select {
 		case reply := <-replyChan:
 			timer.Reset(60 * time.Second)
-
-			newContent := strings.Replace(reply.Choices[0].Message.Content, curcontent, "", 1)
-			if newContent == "" {
-				return contents, nil
-			}
-			reply.Choices[0].Delta.Content = newContent
-			curcontent += newContent
-			contents = append(contents, newContent)
-
+			curcontent = reply.Choices[0].Message.Content
 			if SliceContains(CozeErrorMessages, reply.Choices[0].Message.Content) {
 				if SliceContains(CozeDailyLimitErrorMessages, reply.Choices[0].Message.Content) {
 					logger.DefaultLogger.Warn(fmt.Sprintf("USER_AUTHORIZATION:%s DAILY LIMIT", b.authorization))
 					b.authorizations = FilterSlice(b.authorizations, b.authorization)
 				}
 			}
-			continue
 		case <-timer.C:
-			return nil, errors.New("未获取到回复")
+			return "", errors.New("未获取到回复")
 		case <-stopChan:
-			return nil, errors.New("连接中断")
+			return curcontent, nil
 		}
 	}
 }
 
-func (b *DiscordBot) SendRaw(message string) (*discordgo.Message, string, error) {
+func (b *DiscordBot) SendRaw(message string) (*discordgo.Message, string, string, error) {
 	if b.session == nil {
 		logger.DefaultLogger.Error("discord session is nil")
-		return nil, "", fmt.Errorf("discord session not initialized")
+		return nil, "", "", fmt.Errorf("discord session not initialized")
 	}
 
 	//var sentMsg *discordgo.Message
@@ -417,17 +304,17 @@ func (b *DiscordBot) SendRaw(message string) (*discordgo.Message, string, error)
 	tokens := CountTokens(content)
 	if tokens > 128*1000 {
 		logger.DefaultLogger.Error(fmt.Sprintf("prompt已超过限制,请分段发送 [%v] %s", tokens, content))
-		return nil, "", fmt.Errorf("prompt已超过限制,请分段发送 [%v]", tokens)
+		return nil, "", "", fmt.Errorf("prompt已超过限制,请分段发送 [%v]", tokens)
 	}
 
 	userAuth, err := RandomElement(b.authorizations)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	sendchannelid, err := b.GetSendChannelId()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	for i, sendContent := range ReverseSegment(content, 1990) {
@@ -444,7 +331,7 @@ func (b *DiscordBot) SendRaw(message string) (*discordgo.Message, string, error)
 				return b.SendRaw(message)
 			}
 			logger.DefaultLogger.Error(fmt.Sprintf("error sending message: %s", err))
-			return nil, "", fmt.Errorf("error sending message")
+			return nil, sendchannelid, "", fmt.Errorf("error sending message")
 		}
 
 		time.Sleep(1 * time.Second)
@@ -452,16 +339,16 @@ func (b *DiscordBot) SendRaw(message string) (*discordgo.Message, string, error)
 		if i == len(ReverseSegment(content, 1990))-1 {
 			return &discordgo.Message{
 				ID: sentMsgId,
-			}, userAuth, nil
+			}, userAuth, sendchannelid, nil
 		}
 	}
-	return &discordgo.Message{}, "", fmt.Errorf("error sending message")
+	return &discordgo.Message{}, "", sendchannelid, fmt.Errorf("error sending message")
 }
 
-func (b *DiscordBot) SendMessageSpec(channelid, bottoken, message string) (*discordgo.Message, string, error) {
+func (b *DiscordBot) SendMessageSpec(channelid, bottoken, message string) (*discordgo.Message, string, string, error) {
 	if b.session == nil {
 		logger.DefaultLogger.Error("discord session is nil")
-		return nil, "", fmt.Errorf("discord session not initialized")
+		return nil, "", "", fmt.Errorf("discord session not initialized")
 	}
 
 	//var sentMsg *discordgo.Message
@@ -475,12 +362,12 @@ func (b *DiscordBot) SendMessageSpec(channelid, bottoken, message string) (*disc
 	tokens := CountTokens(content)
 	if tokens > 128*1000 {
 		logger.DefaultLogger.Error(fmt.Sprintf("prompt已超过限制,请分段发送 [%v] %s", tokens, content))
-		return nil, "", fmt.Errorf("prompt已超过限制,请分段发送 [%v]", tokens)
+		return nil, "", "", fmt.Errorf("prompt已超过限制,请分段发送 [%v]", tokens)
 	}
 
 	userAuth, err := RandomElement(b.authorizations)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	for i, sendContent := range ReverseSegment(content, 1990) {
@@ -497,7 +384,7 @@ func (b *DiscordBot) SendMessageSpec(channelid, bottoken, message string) (*disc
 				return b.SendRaw(message)
 			}
 			logger.DefaultLogger.Error(fmt.Sprintf("error sending message: %s", err))
-			return nil, "", fmt.Errorf("error sending message")
+			return nil, "", "", fmt.Errorf("error sending message")
 		}
 
 		time.Sleep(1 * time.Second)
@@ -505,214 +392,10 @@ func (b *DiscordBot) SendMessageSpec(channelid, bottoken, message string) (*disc
 		if i == len(ReverseSegment(content, 1990))-1 {
 			return &discordgo.Message{
 				ID: sentMsgId,
-			}, userAuth, nil
+			}, userAuth, channelid, nil
 		}
 	}
-	return &discordgo.Message{}, "", fmt.Errorf("error sending message")
-}
-
-// processMessage 提取并处理消息内容及其嵌入元素
-func processMessageUpdate(m *discordgo.MessageUpdate) ReplyResp {
-	var embedUrls []string
-	for _, embed := range m.Embeds {
-		if embed.Image != nil {
-			embedUrls = append(embedUrls, embed.Image.URL)
-		}
-	}
-
-	return ReplyResp{
-		Content:   m.Content,
-		EmbedUrls: embedUrls,
-	}
-}
-
-func processMessageUpdateForOpenAI(m *discordgo.MessageUpdate) OpenAIChatCompletionResponse {
-
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				if m.Content != "" {
-					m.Content += "\n"
-				}
-				m.Content += fmt.Sprintf("%s\n![Image](%s)", embed.Image.URL, embed.Image.URL)
-			}
-		}
-	}
-
-	promptTokens := CountTokens(m.ReferencedMessage.Content)
-	completionTokens := CountTokens(m.Content)
-
-	return OpenAIChatCompletionResponse{
-		ID:      m.ID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   "Coze-Model",
-		Choices: []OpenAIChoice{
-			{
-				Index: 0,
-				Message: OpenAIMessage{
-					Role:    "assistant",
-					Content: m.Content,
-				},
-			},
-		},
-		Usage: OpenAIUsage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      promptTokens + completionTokens,
-		},
-	}
-}
-
-func processMessageUpdateForOpenAIImage(m *discordgo.MessageUpdate) OpenAIImagesGenerationResponse {
-	var response OpenAIImagesGenerationResponse
-
-	for _, item := range CozeDailyLimitErrorMessages {
-		if item == m.Content {
-			return OpenAIImagesGenerationResponse{
-				Created:    time.Now().Unix(),
-				Data:       response.Data,
-				DailyLimit: true,
-			}
-		}
-	}
-
-	re := regexp.MustCompile(`]\((https?://\S+)\)`)
-	subMatches := re.FindAllStringSubmatch(m.Content, -1)
-
-	if len(subMatches) == 0 && len(m.Embeds) == 0 {
-		response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-			RevisedPrompt: m.Content,
-		})
-	}
-
-	for _, match := range subMatches {
-		response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-			URL:           match[1],
-			RevisedPrompt: m.Content,
-		})
-	}
-
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				//	if m.Content != "" {
-				//		m.Content += "\n"
-				//	}
-				response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-					URL:           embed.Image.URL,
-					RevisedPrompt: m.Content,
-				})
-			}
-		}
-	}
-
-	return OpenAIImagesGenerationResponse{
-		Created: time.Now().Unix(),
-		Data:    response.Data,
-	}
-}
-
-// processMessage 提取并处理消息内容及其嵌入元素
-func processMessageCreate(m *discordgo.MessageCreate) ReplyResp {
-	var embedUrls []string
-	for _, embed := range m.Embeds {
-		if embed.Image != nil {
-			embedUrls = append(embedUrls, embed.Image.URL)
-		}
-	}
-
-	return ReplyResp{
-		Content:   m.Content,
-		EmbedUrls: embedUrls,
-	}
-}
-
-func processMessageCreateForOpenAI(m *discordgo.MessageCreate) OpenAIChatCompletionResponse {
-
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				if m.Content != "" {
-					m.Content += "\n"
-				}
-				m.Content += fmt.Sprintf("%s\n![Image](%s)", embed.Image.URL, embed.Image.URL)
-			}
-		}
-	}
-
-	promptTokens := CountTokens(m.ReferencedMessage.Content)
-	completionTokens := CountTokens(m.Content)
-
-	return OpenAIChatCompletionResponse{
-		ID:      m.ID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   "Coze-Model",
-		Choices: []OpenAIChoice{
-			{
-				Index: 0,
-				Message: OpenAIMessage{
-					Role:    "assistant",
-					Content: m.Content,
-				},
-			},
-		},
-		Usage: OpenAIUsage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      promptTokens + completionTokens,
-		},
-	}
-}
-
-func processMessageCreateForOpenAIImage(m *discordgo.MessageCreate) OpenAIImagesGenerationResponse {
-	var response OpenAIImagesGenerationResponse
-
-	for _, item := range CozeDailyLimitErrorMessages {
-		if item == m.Content {
-			return OpenAIImagesGenerationResponse{
-				Created:    time.Now().Unix(),
-				Data:       response.Data,
-				DailyLimit: true,
-			}
-		}
-	}
-
-	re := regexp.MustCompile(`]\((https?://\S+)\)`)
-	subMatches := re.FindAllStringSubmatch(m.Content, -1)
-
-	if len(subMatches) == 0 && len(m.Embeds) == 0 {
-		response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-			RevisedPrompt: m.Content,
-		})
-	}
-
-	for i, match := range subMatches {
-		response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-			URL:           match[i],
-			RevisedPrompt: m.Content,
-		})
-	}
-
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				//if m.Content != "" {
-				//	m.Content += "\n"
-				//}
-				response.Data = append(response.Data, &OpenAIImagesGenerationDataResponse{
-					URL:           embed.Image.URL,
-					RevisedPrompt: m.Content,
-				})
-			}
-		}
-	}
-
-	return OpenAIImagesGenerationResponse{
-		Created: time.Now().Unix(),
-		Data:    response.Data,
-	}
+	return &discordgo.Message{}, "", "", fmt.Errorf("error sending message")
 }
 
 // 用户端发送消息 注意 此为临时解决方案 后续会优化代码
